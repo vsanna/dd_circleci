@@ -28,8 +28,8 @@ circleci orb publich production version
 - change
 - validate
 - merge
-    - master mergeで勝手に出してくれるっぽい. tagは?
-    - commit msgに `[semver:major] first orb release.` これ必要
+    - when merging PR to master, it automatically publishes new version?
+    - commit msg must have formatted title like `[semver:major] first orb release.`
 
 
 ## orb dir structure
