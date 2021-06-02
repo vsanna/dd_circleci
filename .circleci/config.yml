@@ -1,41 +1,136 @@
+# version: for management of compatibility
+# values: 2, 2.0, 2.1
 version: 2.1
 
+# orb: orb is like shared config.yml. it can has jobs/executors/commands sections like we define here.
+#   see: https://github.com/vsanna/dd_orb
+# To use private orbs, it's required to use Scale plan.
+#   public orb registry: https://circleci.com/developer/ja/orbs
+# Here, circleci/python@1.2 is imported and named as python so that we can call its jobs/commands/executors as python/{hoge}
+# doc: https://circleci.com/developer/orbs/orb/circleci/python
 orbs:
-  # The python orb contains a set of prepackaged CircleCI configuration you can use repeatedly in your configuration files
-  # Orb commands and jobs help you with common scripting around a language/tool
-  # so you dont have to copy and paste it everywhere.
-  # See the orb documentation here: https://circleci.com/developer/orbs/orb/circleci/python
   python: circleci/python@1.2
+  myorb: vsanna/dd_orb@1.0.0
 
-workflows:
-  sample:  # This is the name of the workflow, feel free to change it to better match your workflow.
-    # Inside the workflow, you define the jobs you want to run. 
-    # For more details on extending your workflow, see the configuration docs: https://circleci.com/docs/2.0/configuration-reference/#workflows 
-    jobs:
-      - build-and-test
+# commands: we can define a set of steps as a command. for reusing
+commands:
+  hello:
+    description: test command
+    parameters:
+      msg:
+        type: string
+        default: "Hello World"
+    steps:
+      - run: echo << parameters.msg >> << pipeline.id>> << pipeline.number >> << pipeline.git.branch>> << pipeline.git.revision >>
 
 
+# executor: runtime for jobs. for reusing
+executors:
+  my-executor:
+    docker:
+      - image: circleci/ruby:2.5.1-node-browsers
+
+# jobs: a unit which composes workflow. A unit has a set of steps
 jobs:
-  build-and-test:  # This is the name of the job, feel free to change it to better match what you're trying to do!
-    # These next lines defines a Docker executors: https://circleci.com/docs/2.0/executor-types/
-    # You can specify an image from Dockerhub or use one of the convenience images from CircleCI's Developer Hub
-    # A list of available CircleCI Docker convenience images are available here: https://circleci.com/developer/images/image/cimg/python
-    # The executor is the environment in which the steps below will be executed - below will use a python 3.9 container
-    # Change the version below to your required version of python
+  build:
     docker:
       - image: cimg/python:3.8
-    # Checkout the code as the first step. This is a dedicated CircleCI step.
-    # The python orb's install-packages step will install the dependencies from a Pipfile via Pipenv by default.
-    # Here we're making sure we use just use the system-wide pip. By default it uses the project root's requirements.txt.
-    # Then run your tests!
-    # CircleCI will report the results back to your VCS provider.
+    environment:
+      FOO: bar
     steps:
       - checkout
+      - run:
+          command: echo $FOO
+      - run:
+          name: Start build
+          command: echo "starting..."
+      # python/install-packages is a command defined in python orb
+      # https://circleci.com/developer/orbs/orb/circleci/python
       - python/install-packages:
           pkg-manager: pip
-          # app-dir: ~/project/package-directory/  # If you're requirements.txt isn't in the root directory.
-          # pip-dependency-file: test-requirements.txt  # if you have a different name for your requirements file, maybe one that combines your runtime and test requirements.
+  test:
+    docker:
+      - image: cimg/python:3.8
+    steps:
+      - checkout
+      - run:
+          name: startTest
+          command: echo "starting test..."
+      - python/install-packages:
+          pkg-manager: pip
       - run:
           name: Run tests
-          # This assumes pytest is installed via the install-package step above
           command: pytest
+  sayHello:
+    executor: my-executor
+    steps:
+      - hello
+      - hello:
+          msg: "override!"
+      # from custom orb.
+      - myorb/say-hello-from-orb
+  skippableSayHello:
+    executor: my-executor
+    steps:
+      # when step: it's step itself, and also it can have a set of steps
+      # what can have when: step's run, job's steps, workflow
+      - run:
+          command: |
+            echo "this is skippable sayHello"
+      - when:
+          condition:
+            and:
+              - equal: [1, 1]
+              - not: false
+          steps:
+            - hello
+            - hello:
+                msg: "override!"
+
+# parameters: variables which are usable in this file. we can specify values when calling API
+# there are some built-in variables. ex. pipeline.id, pipeline.number, pipeline.git.tag, pipeline.git.branch, etc
+parameters:
+  run_test:
+    type: boolean
+    default: true
+
+# workflow: it defines how jobs works together(parallel or sequential, order, dependency, etc..)
+# Workflow also define when to kick them
+workflows:
+  version: 2
+  scheduled-flow:
+    # As default, workflows are triggered when getting push
+    triggers:
+      - schedule:
+          cron: "0 0 * * *"
+          filters:
+            branches:
+              only:
+                - master
+    jobs:
+      - sayHello
+  myworkflow:
+    # `when` decides whethere to trigger the workflow or not
+    when: << pipeline.parameters.run_test >>
+    jobs:
+      - build:
+        # we can have filters in job level
+        filters:
+          branches:
+            only: master
+      - approval:
+          name: renamed approval
+          requires:
+            - build
+          # we can use shared env(= map of environment variables)
+          context: org-global
+          # probably, we use type with approval only when we wanna use approval step..
+          type: approval
+      - test:
+          name: renamed test
+          requires:
+            - renamed approval
+      # these 2 jobs don't have requires attr, so they run parallelly with build job
+      - sayHello
+      - skippableSayHello
+
